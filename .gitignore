@@ -21,3 +21,8 @@
 .env
 .env.*
 !.env.example
+
+# Local companion builds and private exports
+/bin/
+/dist/
+/results*.json

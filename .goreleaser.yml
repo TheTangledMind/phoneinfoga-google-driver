@@ -1,42 +1,19 @@
+version: 2
+project_name: phoneinfoga-google-driver
 before:
   hooks:
-    - go generate ./...
     - go mod download
 builds:
-- env:
-  - CGO_ENABLED=0
-  - GO111MODULE=on
-  binary: phoneinfoga
-  goos:
-    - linux
-    - darwin
-  goarch:
-    - 386
-    - amd64
-    - arm
-    - arm64
-    - aarch64
+  - binary: phoneinfoga-google-driver
+    env:
+      - CGO_ENABLED=0
+    goos: [linux, darwin]
+    goarch: [amd64, arm64]
+    flags: [-trimpath]
 archives:
-- name_template: '{{ .ProjectName }}_{{ .Os }}_{{ .Arch }}{{ if .Arm }}v{{ .Arm }}{{ end }}'
-  replacements:
-    darwin: Darwin
-    linux: Linux
-    windows: Windows
-    386: i386
-    amd64: x86_64
-  files:
-    - none*
+  - formats: [tar.gz]
+    files: [README.md, VALIDATION.md, LICENSE]
 checksum:
-  name_template: '{{ .ProjectName }}_checksums.txt'
-snapshot:
-  name_template: "{{ .Tag }}-next"
+  name_template: checksums.txt
 changelog:
   sort: asc
-  filters:
-    exclude:
-    - '^docs:'
-    - '^test:'
-    - '^chore:'
-    - '^ci:'
-    - Merge pull request
-    - Merge branch

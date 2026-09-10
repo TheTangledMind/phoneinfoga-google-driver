@@ -2,99 +2,102 @@ package main
 
 import (
 	"context"
-	"log"
+	"errors"
+	"flag"
+	"fmt"
+	"io"
 	"os"
-	"strings"
+	"os/signal"
+	"syscall"
 	"time"
-
-	"github.com/PuerkitoBio/goquery"
-	"github.com/chromedp/chromedp"
-	"github.com/fatih/color"
-	phoneinfoga "gopkg.in/sundowndev/phoneinfoga.v2/pkg/scanners"
 )
 
-func processDorks(ctx context.Context, title string, links []*phoneinfoga.GoogleSearchDork) error {
-	var results string
-
-	color.New(color.FgWhite).Printf("[-] %s\n", title)
-
-	for _, link := range links {
-		err := chromedp.Run(ctx,
-			chromedp.Navigate(link.URL),
-			// chromedp.WaitVisible("*"),
-			chromedp.OuterHTML("body", &results),
-		)
-		if err != nil {
-			return err
+func runCLI(ctx context.Context, args []string, out, errOut io.Writer) (code int) {
+	flags := flag.NewFlagSet("phoneinfoga-google-driver", flag.ContinueOnError)
+	flags.SetOutput(errOut)
+	number := flags.String("number", "", "international phone number (searches disclose it to Google)")
+	browser := flags.String("browser", "", "installed Chrome/Chromium executable")
+	jsonPath := flags.String("json", "", "optional new JSON export file (0600; never overwrite)")
+	dry := flags.Bool("queries-only", false, "print locally generated queries without launching a browser")
+	version := flags.Bool("version", false, "show query compatibility version")
+	nav := flags.Duration("navigation-timeout", 30*time.Second, "timeout for each navigation/browser operation")
+	overall := flags.Duration("overall-timeout", 15*time.Minute, "overall session limit including manual waits")
+	manual := flags.Duration("manual-timeout", 5*time.Minute, "limit for each manual CAPTCHA/consent wait")
+	pace := flags.Duration("pace", 5*time.Second, "minimum pause between queries")
+	max := flags.Int("max-queries", 5, "maximum queries (1-45; no retries or result-page crawling)")
+	if err := flags.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return 0
 		}
-
-		// Load the HTML document
-		doc, err := goquery.NewDocumentFromReader(strings.NewReader(results))
-		if err != nil {
-			return err
-		}
-
-		if _, exist := doc.Find("div#recaptcha").Attr("class"); exist {
-			log.Fatal("Chromium is facing Google catpcha.")
-		}
-
-		doc.Find("div#search div.g").Each(func(_ int, el *goquery.Selection) {
-			str, _ := el.Find("a").Attr("href")
-			color.New(color.FgGreen).Printf("[+] %s\n", str)
-		})
+		return 2
 	}
-
-	return nil
+	if *version {
+		fmt.Fprintf(out, "phoneinfoga-google-driver (PhoneInfoga queries %s)\n", phoneinfogaVersion)
+		return 0
+	}
+	if os.Geteuid() == 0 {
+		fmt.Fprintln(errOut, "Refusing root execution; browser sandbox must remain enabled.")
+		return 2
+	}
+	if flags.NArg() != 0 || *max < 1 || *max > 45 || *nav <= 0 || *overall <= 0 || *manual <= 0 || *pace < time.Second {
+		fmt.Fprintln(errOut, "Invalid options: use --help; pacing must be at least 1s and max-queries 1-45.")
+		return 2
+	}
+	queries, err := generateQueries(*number)
+	if err != nil {
+		fmt.Fprintln(errOut, err)
+		return 2
+	}
+	if len(queries) > *max {
+		queries = queries[:*max]
+	}
+	fmt.Fprintln(out, resultNotice)
+	if *dry {
+		for _, q := range queries {
+			fmt.Fprintf(out, "%s: %s\n%s\n", q.Category, safeText(q.Text), safeText(q.URL))
+		}
+		return 0
+	}
+	path, err := findBrowser(*browser)
+	if err != nil {
+		fmt.Fprintln(errOut, err)
+		return 2
+	}
+	ctx, cancel := context.WithTimeout(ctx, *overall)
+	defer cancel()
+	b, err := newBrowser(ctx, path, *nav)
+	if err != nil {
+		fmt.Fprintln(errOut, err)
+		return 1
+	}
+	defer func() {
+		if err := b.Close(); err != nil {
+			fmt.Fprintln(errOut, "Temporary browser profile cleanup failed; remove only the phoneinfoga-google-driver-* profile created by this run.")
+			code = 1
+		}
+	}()
+	report := runQueries(ctx, b, queries, RunOptions{NavigationTimeout: *nav, ManualTimeout: *manual, Pace: *pace, Poll: 500 * time.Millisecond, MaxQueries: *max}, out)
+	if *jsonPath != "" {
+		if err := exportJSON(*jsonPath, report); err != nil {
+			fmt.Fprintln(errOut, err)
+			return 1
+		}
+		fmt.Fprintln(out, "Private JSON export written.")
+	}
+	if report.Interrupted {
+		fmt.Fprintln(errOut, "Session interrupted or overall timeout reached.")
+		return 1
+	}
+	for _, q := range report.Queries {
+		if q.Status != Completed && q.Status != NoResults {
+			return 1
+		}
+	}
+	return 0
 }
-
 func main() {
-	if len(os.Args) < 2 {
-		color.New(color.FgRed).Printf("[!] %s\n", "Please specify a phone number to scan.")
-		os.Exit(1)
-	}
-
-	input := os.Args[1]
-	number, err := phoneinfoga.LocalScan(input)
-
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	// create chrome instance
-	ctx, cancel := chromedp.NewContext(
-		context.Background(),
-		chromedp.WithLogf(log.Printf),
-	)
-	defer cancel()
-
-	// create a timeout
-	ctx, cancel = context.WithTimeout(ctx, 30*time.Second)
-	defer cancel()
-
-	links := phoneinfoga.GoogleSearchScan(number)
-
-	err = processDorks(ctx, "General sources", links.General)
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	err = processDorks(ctx, "Individual sources", links.Individuals)
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	err = processDorks(ctx, "Reputation footprints", links.Reputation)
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	err = processDorks(ctx, "Social medias", links.SocialMedia)
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	err = processDorks(ctx, "Disposable number providers", links.DisposableProviders)
-	if err != nil {
-		log.Fatal(err)
-	}
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	code := runCLI(ctx, os.Args[1:], os.Stdout, os.Stderr)
+	stop()
+	os.Exit(code)
 }
