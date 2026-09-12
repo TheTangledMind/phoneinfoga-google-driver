@@ -2,6 +2,7 @@ package main
 
 import (
 	"errors"
+	"github.com/TheTangledMind/phoneinfoga-google-driver/internal/searchlist"
 	"regexp"
 
 	"github.com/sundowndev/phoneinfoga/v2/lib/number"
@@ -47,4 +48,28 @@ func generateQueries(input string) ([]Query, error) {
 		}
 	}
 	return queries, nil
+}
+
+// Keep internal/searchlist identical to the fork's lib/searchlist until a shared
+// versioned module is published. The on-disk format is versioned independently.
+func generateQueriesFromList(input, path string) ([]Query, error) {
+	if path == "" {
+		return generateQueries(input)
+	}
+	if _, err := generateQueries(input); err != nil {
+		return nil, err
+	}
+	n, err := number.NewNumber(input)
+	if err != nil {
+		return nil, err
+	}
+	queries, err := searchlist.Load(path, n.E164, n.RawLocal)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]Query, 0, len(queries))
+	for _, q := range queries {
+		out = append(out, Query{Category: q.Category, Text: q.Text, URL: q.URL})
+	}
+	return out, nil
 }

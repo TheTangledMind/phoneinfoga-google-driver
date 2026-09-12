@@ -16,6 +16,7 @@ func runCLI(ctx context.Context, args []string, out, errOut io.Writer) (code int
 	flags := flag.NewFlagSet("phoneinfoga-google-driver", flag.ContinueOnError)
 	flags.SetOutput(errOut)
 	number := flags.String("number", "", "international phone number (searches disclose it to Google)")
+	searchList := flags.String("search-list", "", "version 1 JSON Google query list; defaults to PhoneInfoga 2.11.0 queries")
 	browser := flags.String("browser", "", "installed Chrome/Chromium executable")
 	jsonPath := flags.String("json", "", "optional new JSON export file (0600; never overwrite)")
 	dry := flags.Bool("queries-only", false, "print locally generated queries without launching a browser")
@@ -43,10 +44,14 @@ func runCLI(ctx context.Context, args []string, out, errOut io.Writer) (code int
 		fmt.Fprintln(errOut, "Invalid options: use --help; pacing must be at least 1s and max-queries 1-45.")
 		return 2
 	}
-	queries, err := generateQueries(*number)
+	queries, err := generateQueriesFromList(*number, *searchList)
 	if err != nil {
 		fmt.Fprintln(errOut, err)
 		return 2
+	}
+	if len(queries) == 0 {
+		fmt.Fprintln(out, "No enabled queries; no searches submitted.")
+		return 0
 	}
 	if len(queries) > *max {
 		queries = queries[:*max]

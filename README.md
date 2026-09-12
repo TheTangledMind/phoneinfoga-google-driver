@@ -145,3 +145,28 @@ See [VALIDATION.md](VALIDATION.md) for observed results and limits. Automated te
 use saved synthetic HTML and a fictional number. No real phone numbers are sent
 to Google during tests. Fixture behavior must not be described as live-Google
 verification.
+
+## Editable query lists
+
+`--search-list /path/to/queries.json` replaces built-in queries for this run.
+The format is shared with our PhoneInfoga fork:
+
+```json
+{"version":1,"queries":[{"category":"general","query":"\"{number}\"","enabled":true}]}
+```
+
+Placeholders: `{number}` (E.164 including `+`) and `{national}` (national digits).
+Categories: `general`, `individuals`, `reputation`, `social_media`, `disposable_providers`.
+Only explicitly enabled entries run. Lists are bounded to 100 entries/64 KiB,
+validated as data only, and still subject to `--max-queries` and `--pace`.
+An empty enabled list exits without starting Chrome. With no list supplied,
+default query generation remains pinned to PhoneInfoga 2.11.0.
+
+```bash
+./bin/phoneinfoga-google-driver --number '+12025550123' \
+  --search-list /path/to/queries.json --queries-only
+```
+
+Keep `internal/searchlist` identical to the fork's `lib/searchlist` until a shared
+versioned module is published. Compatibility and expansion tests are offline;
+this change has not been verified against live Google.
